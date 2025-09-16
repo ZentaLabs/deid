@@ -71,7 +71,6 @@ class DicomParser:
         if not os.path.exists(config):
             bot.error("Cannot find config %s, exiting" % (config))
         self.config = read_json(config, ordered_dict=True)
-
         # Keep a lookup of deid provided functions
         self.deid_funcs = deid_funcs
 
@@ -166,6 +165,9 @@ class DicomParser:
 
             # Otherwise it's an index into a sequence
             else:
+                # If the parent doesn't have a value attribute or it's None, we can't continue
+                if not hasattr(parent, "value") or parent.value is None:
+                    return None, desired
                 # If the sequence is outside the bounds of the array of items
                 # within the sequence, we can't continue.
                 if int(uid) < 0 or int(uid) >= len(parent.value):
@@ -187,7 +189,33 @@ class DicomParser:
         parent, desired = self.get_nested_field(field, return_parent=True)
         if parent and desired in parent:
             del parent[desired]
-            self.fields.remove(field.uid)
+            del self.fields[field.uid]
+            # Log successful removal with tag name if available
+            tag_name = getattr(field.element, "keyword", "") or getattr(
+                field.element, "name", ""
+            )
+            if tag_name:
+                bot.info(f"Deid - Removed tag {desired} ({tag_name}).")
+            else:
+                bot.info(f"Deid - Removed tag {desired}.")
+        elif parent is None and desired in self.dicom:
+            # Handle case where get_nested_field couldn't navigate (e.g., empty sequence)
+            # but the field exists directly in the main dicom dataset
+            del self.dicom[desired]
+            del self.fields[field.uid]
+            # Log successful removal with tag name if available
+            tag_name = getattr(field.element, "keyword", "") or getattr(
+                field.element, "name", ""
+            )
+            if tag_name:
+                bot.info(f"Deid - Removed tag {desired} ({tag_name}).")
+            else:
+                bot.info(f"Deid - Removed tag {desired}.")
+        else:
+            # Field was not found - this can happen if parent sequence was already removed
+            bot.warning(
+                f"Deid - Could not remove field {field.uid} - field not found (parent may have been removed)"
+            )
 
     def blank_field(self, field):
         """
@@ -197,6 +225,17 @@ class DicomParser:
         parent, desired = self.get_nested_field(field, return_parent=True)
         if parent and desired in parent:
             parent[desired].value = None
+        elif parent is None and desired in self.dicom:
+            # Handle case where get_nested_field couldn't navigate (e.g., empty sequence)
+            # but the field exists directly in the main dicom dataset
+            self.dicom[desired].value = None
+        else:
+            # Field was not found - this can happen if parent sequence was already removed
+            bot.warning(
+                f"Deid - Could not blank field {field.uid} - field not found (parent may have been removed)"
+            )
+            # but the field exists directly in the main dicom dataset
+            self.dicom[desired].value = None
 
     def replace_field(self, field, value):
         """
@@ -512,8 +551,44 @@ class DicomParser:
                 # in order to use it for directly assigning the element to a
                 # nested field in the `self.dicom` dataset.
                 *parent_tags, last_tag = full_tag_path.split("__")
-                for tag in parent_tags:
-                    dataset_cursor = dataset_cursor[parse_tag_string(tag)]
+                for i, tag in enumerate(parent_tags):
+                    parsed_tag = parse_tag_string(tag)
+
+                    # Handle sequence indices differently from tag lookups
+                    if isinstance(parsed_tag, int) and not str(tag).startswith("("):
+                        # This is a sequence index, check if the current cursor is a sequence with enough items
+                        if not hasattr(dataset_cursor, "value"):
+                            bot.warning(
+                                f"Cannot replace/add field {field.uid} - expected element with value but found {type(dataset_cursor)}"
+                            )
+                            return
+                        # Check if it's a sequence (list-like) with enough items
+                        try:
+                            if parsed_tag >= len(dataset_cursor.value):
+                                bot.warning(
+                                    f"Cannot replace/add field {field.uid} - sequence index {parsed_tag} out of bounds (sequence has {len(dataset_cursor.value)} items)"
+                                )
+                                return
+                            dataset_cursor = dataset_cursor.value[parsed_tag]
+                        except (TypeError, AttributeError):
+                            bot.warning(
+                                f"Cannot replace/add field {field.uid} - expected sequence but found {type(dataset_cursor.value)}"
+                            )
+                            return
+                    else:
+                        # This is a tag lookup
+                        if parsed_tag not in dataset_cursor:
+                            # More descriptive warning for missing parent sequences
+                            if hasattr(field, "uid") and "__" in field.uid:
+                                bot.warning(
+                                    f"Cannot replace/add field {field.uid} - parent tag {hex(parsed_tag) if isinstance(parsed_tag, int) else parsed_tag} was already removed"
+                                )
+                            else:
+                                bot.warning(
+                                    f"Cannot navigate to tag {hex(parsed_tag) if isinstance(parsed_tag, int) else parsed_tag} in sequence - tag not found"
+                                )
+                            return
+                        dataset_cursor = dataset_cursor[parsed_tag]
                 dataset_cursor[parse_tag_string(last_tag)] = element
 
         # Assume we don't want to add an empty value
