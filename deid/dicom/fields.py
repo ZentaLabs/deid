@@ -302,8 +302,12 @@ def field_matches_expander(expander, expression_string, expression_re, field):
     if expander.lower() == "select":
         return field.select_matches(expression_string)
 
+    # Escape the expression string to avoid regex errors from unbalanced parentheses
     if expression_re is None:
-        expression_re = re.compile(expression_string, re.IGNORECASE)
+        try:
+            expression_re = re.compile(expression_string, re.IGNORECASE)
+        except re.error:
+            expression_re = re.compile(re.escape(expression_string), re.IGNORECASE)
 
     if expander.lower() in ["endswith", "startswith", "contains"]:
         return field.name_contains(expression_re)

@@ -189,7 +189,7 @@ class DicomParser:
         parent, desired = self.get_nested_field(field, return_parent=True)
         if parent and desired in parent:
             del parent[desired]
-            del self.fields[field.uid]
+            self.fields.remove(field.uid)
             # Log successful removal with tag name if available
             tag_name = getattr(field.element, "keyword", "") or getattr(
                 field.element, "name", ""
@@ -202,7 +202,7 @@ class DicomParser:
             # Handle case where get_nested_field couldn't navigate (e.g., empty sequence)
             # but the field exists directly in the main dicom dataset
             del self.dicom[desired]
-            del self.fields[field.uid]
+            self.fields.remove(field.uid)
             # Log successful removal with tag name if available
             tag_name = getattr(field.element, "keyword", "") or getattr(
                 field.element, "name", ""
@@ -370,7 +370,7 @@ class DicomParser:
         a DicomField. If we find a sequence, we unwrap it and
         represent the location with the name (e.g., Sequence__Child)
         """
-        if not self.fields or not self.fields_by_name:
+        if not self.fields:
             self.fields = get_fields_with_lookup(
                 dicom=self.dicom,
                 expand_sequences=expand_sequences,
