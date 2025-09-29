@@ -195,9 +195,9 @@ class DicomParser:
                 field.element, "name", ""
             )
             if tag_name:
-                bot.info(f"Deid - Removed tag {desired} ({tag_name}).")
+                bot.debug(f"Deid - Removed tag {desired} ({tag_name}).")
             else:
-                bot.info(f"Deid - Removed tag {desired}.")
+                bot.debug(f"Deid - Removed tag {desired}.")
         elif parent is None and desired in self.dicom:
             # Handle case where get_nested_field couldn't navigate (e.g., empty sequence)
             # but the field exists directly in the main dicom dataset
@@ -208,9 +208,9 @@ class DicomParser:
                 field.element, "name", ""
             )
             if tag_name:
-                bot.info(f"Deid - Removed tag {desired} ({tag_name}).")
+                bot.debug(f"Deid - Removed tag {desired} ({tag_name}).")
             else:
-                bot.info(f"Deid - Removed tag {desired}.")
+                bot.debug(f"Deid - Removed tag {desired}.")
         else:
             # Field was not found - this can happen if parent sequence was already removed
             bot.warning(
