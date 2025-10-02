@@ -566,20 +566,20 @@ class DicomParser:
                     if isinstance(parsed_tag, int) and not str(tag).startswith("("):
                         # This is a sequence index, check if the current cursor is a sequence with enough items
                         if not hasattr(dataset_cursor, "value"):
-                            bot.warning(
+                            bot.debug(
                                 f"Cannot replace/add field {field.uid} - expected element with value but found {type(dataset_cursor)}"
                             )
                             return
                         # Check if it's a sequence (list-like) with enough items
                         try:
                             if parsed_tag >= len(dataset_cursor.value):
-                                bot.warning(
+                                bot.debug(
                                     f"Cannot replace/add field {field.uid} - sequence index {parsed_tag} out of bounds (sequence has {len(dataset_cursor.value)} items)"
                                 )
                                 return
                             dataset_cursor = dataset_cursor.value[parsed_tag]
                         except (TypeError, AttributeError):
-                            bot.warning(
+                            bot.debug(
                                 f"Cannot replace/add field {field.uid} - expected sequence but found {type(dataset_cursor.value)}"
                             )
                             return
@@ -588,11 +588,11 @@ class DicomParser:
                         if parsed_tag not in dataset_cursor:
                             # More descriptive warning for missing parent sequences
                             if hasattr(field, "uid") and "__" in field.uid:
-                                bot.warning(
+                                bot.debug(
                                     f"Cannot replace/add field {field.uid} - parent tag {hex(parsed_tag) if isinstance(parsed_tag, int) else parsed_tag} was already removed"
                                 )
                             else:
-                                bot.warning(
+                                bot.debug(
                                     f"Cannot navigate to tag {hex(parsed_tag) if isinstance(parsed_tag, int) else parsed_tag} in sequence - tag not found"
                                 )
                             return
