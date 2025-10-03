@@ -213,7 +213,7 @@ class DicomParser:
                 bot.debug(f"Deid - Removed tag {desired}.")
         else:
             # Field was not found - this can happen if parent sequence was already removed
-            bot.warning(
+            bot.debug(
                 f"Deid - Could not remove field {field.uid} - field not found (parent may have been removed)"
             )
 
