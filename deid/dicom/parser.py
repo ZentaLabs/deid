@@ -661,20 +661,35 @@ class DicomParser:
 
         # Code the value with something in the response
         elif action == "JITTER":
-            value = parse_value(
-                item=self.lookup,
-                dicom=self.dicom,
-                value=value,
-                field=field,
-                funcs=self.deid_funcs,
-            )
-            if value is not None:
-                # Jitter the field by the supplied value
-                new_val = jitter_timestamp(field=field, value=value)
-                if new_val not in [None, ""]:
-                    self.replace_field(field, new_val)
+            # Check if the field's actual value is empty before attempting jitter
+            field_value = field.element.value
+            if field_value in [None, ""] or (
+                isinstance(field_value, str) and not field_value.strip()
+            ):
+                bot.debug(
+                    "JITTER %s skipped: field has empty value, deleting field" % field
+                )
+                self.delete_field(field)
             else:
-                bot.warning("JITTER %s unsuccessful" % field)
+                value = parse_value(
+                    item=self.lookup,
+                    dicom=self.dicom,
+                    value=value,
+                    field=field,
+                    funcs=self.deid_funcs,
+                )
+                if value is not None:
+                    # Jitter the field by the supplied value
+                    new_val = jitter_timestamp(field=field, value=value)
+                    if new_val not in [None, ""]:
+                        self.replace_field(field, new_val)
+                    else:
+                        bot.debug(
+                            "JITTER %s resulted in empty value, deleting field" % field
+                        )
+                        self.delete_field(field)
+                else:
+                    bot.warning("JITTER %s unsuccessful" % field)
 
         # elif "KEEP" --> Do nothing. Keep the original
 

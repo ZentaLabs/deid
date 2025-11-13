@@ -232,13 +232,16 @@ def jitter_timestamp(field, value):
                 )
                 new_value = None
 
-            # If nothing works for single values, issue a warning
+            # If nothing works for single values, set to None
             if not new_value:
-                bot.warning(
-                    f"JITTER not supported for field {field.name} with value '{original}' and VR={dcmvr}"
+                bot.debug(
+                    f"JITTER not supported for field {field.name} with value '{original}' and VR={dcmvr}. Setting to empty value."
                 )
+                return None
     else:
         bot.debug(f"Field {field.name} has None/empty value, skipping jitter")
+        # Return None to skip jittering (field will remain unchanged)
+        return None
 
     bot.debug(
         f"Jitter returning value: {new_value} (type: {type(new_value)}) for field {field.name}"
