@@ -15,7 +15,11 @@ import deid.dicom.utils as utils
 from deid.config import DeidRecipe
 from deid.config.standards import actions as valid_actions
 from deid.dicom.actions import deid_funcs, jitter_timestamp
-from deid.dicom.fields import DicomField, expand_field_expression, get_fields
+from deid.dicom.fields import (
+    DicomField,
+    expand_field_expression,
+    get_fields_with_lookup,
+)
 from deid.dicom.groups import extract_fields_list, extract_values_list
 from deid.dicom.tags import add_tag, get_private, get_tag, remove_sequences
 from deid.dicom.utils import save_dicom
@@ -185,31 +189,31 @@ class DicomParser:
         parent, desired = self.get_nested_field(field, return_parent=True)
         if parent and desired in parent:
             del parent[desired]
-            del self.fields[field.uid]
+            self.fields.remove(field.uid)
             # Log successful removal with tag name if available
             tag_name = getattr(field.element, "keyword", "") or getattr(
                 field.element, "name", ""
             )
             if tag_name:
-                bot.info(f"Deid - Removed tag {desired} ({tag_name}).")
+                bot.debug(f"Deid - Removed tag {desired} ({tag_name}).")
             else:
-                bot.info(f"Deid - Removed tag {desired}.")
+                bot.debug(f"Deid - Removed tag {desired}.")
         elif parent is None and desired in self.dicom:
             # Handle case where get_nested_field couldn't navigate (e.g., empty sequence)
             # but the field exists directly in the main dicom dataset
             del self.dicom[desired]
-            del self.fields[field.uid]
+            self.fields.remove(field.uid)
             # Log successful removal with tag name if available
             tag_name = getattr(field.element, "keyword", "") or getattr(
                 field.element, "name", ""
             )
             if tag_name:
-                bot.info(f"Deid - Removed tag {desired} ({tag_name}).")
+                bot.debug(f"Deid - Removed tag {desired} ({tag_name}).")
             else:
-                bot.info(f"Deid - Removed tag {desired}.")
+                bot.debug(f"Deid - Removed tag {desired}.")
         else:
             # Field was not found - this can happen if parent sequence was already removed
-            bot.warning(
+            bot.debug(
                 f"Deid - Could not remove field {field.uid} - field not found (parent may have been removed)"
             )
 
@@ -269,13 +273,17 @@ class DicomParser:
             if self.recipe.has_values_lists():
                 for group, actions in self.recipe.get_values_lists().items():
                     self.lookup[group] = extract_values_list(
-                        dicom=self.dicom, actions=actions, fields=fields
+                        dicom=self.dicom,
+                        actions=actions,
+                        fields=fields,
                     )
 
             if self.recipe.has_fields_lists():
                 for group, actions in self.recipe.get_fields_lists().items():
                     self.lookup[group] = extract_fields_list(
-                        dicom=self.dicom, actions=actions, fields=fields
+                        dicom=self.dicom,
+                        actions=actions,
+                        fields=fields,
                     )
 
             # actions on the header
@@ -328,10 +336,18 @@ class DicomParser:
         """
         keeps = []
         if self.recipe.deid is not None:
+            # Build field contenders ONCE and reuse for all KEEP actions
+            contenders = None
             for action in self.recipe.get_actions(action="KEEP"):
                 if action and action.get("field"):
+                    # Only build contenders on first iteration
+                    if contenders is None:
+                        contenders = get_fields_with_lookup(self.dicom)
+
                     fields = expand_field_expression(
-                        field=action.get("field"), dicom=self.dicom
+                        field=action.get("field"),
+                        dicom=self.dicom,
+                        contenders=contenders,  # Reuse the same contenders
                     )
                     # keys are in the format "(1234,5678)"
                     keeps.extend(fields.keys())
@@ -363,7 +379,7 @@ class DicomParser:
         represent the location with the name (e.g., Sequence__Child)
         """
         if not self.fields:
-            self.fields = get_fields(
+            self.fields = get_fields_with_lookup(
                 dicom=self.dicom,
                 expand_sequences=expand_sequences,
                 seen=self.seen,
@@ -463,7 +479,9 @@ class DicomParser:
         else:
             # If there is an expander applied to field, we iterate over
             fields = expand_field_expression(
-                field=field, dicom=self.dicom, contenders=self.fields
+                field=field,
+                dicom=self.dicom,
+                contenders=self.fields,
             )
 
         # If it's an addition, we might not have fields
@@ -548,20 +566,20 @@ class DicomParser:
                     if isinstance(parsed_tag, int) and not str(tag).startswith("("):
                         # This is a sequence index, check if the current cursor is a sequence with enough items
                         if not hasattr(dataset_cursor, "value"):
-                            bot.warning(
+                            bot.debug(
                                 f"Cannot replace/add field {field.uid} - expected element with value but found {type(dataset_cursor)}"
                             )
                             return
                         # Check if it's a sequence (list-like) with enough items
                         try:
                             if parsed_tag >= len(dataset_cursor.value):
-                                bot.warning(
+                                bot.debug(
                                     f"Cannot replace/add field {field.uid} - sequence index {parsed_tag} out of bounds (sequence has {len(dataset_cursor.value)} items)"
                                 )
                                 return
                             dataset_cursor = dataset_cursor.value[parsed_tag]
                         except (TypeError, AttributeError):
-                            bot.warning(
+                            bot.debug(
                                 f"Cannot replace/add field {field.uid} - expected sequence but found {type(dataset_cursor.value)}"
                             )
                             return
@@ -570,11 +588,11 @@ class DicomParser:
                         if parsed_tag not in dataset_cursor:
                             # More descriptive warning for missing parent sequences
                             if hasattr(field, "uid") and "__" in field.uid:
-                                bot.warning(
+                                bot.debug(
                                     f"Cannot replace/add field {field.uid} - parent tag {hex(parsed_tag) if isinstance(parsed_tag, int) else parsed_tag} was already removed"
                                 )
                             else:
-                                bot.warning(
+                                bot.debug(
                                     f"Cannot navigate to tag {hex(parsed_tag) if isinstance(parsed_tag, int) else parsed_tag} in sequence - tag not found"
                                 )
                             return
@@ -616,7 +634,7 @@ class DicomParser:
                     element = DataElement(tag["tag"], tag["VR"], value)
                     is_filemeta = str(element.tag).startswith("(0002")
                     update_dicom(element, is_filemeta)
-                    self.fields[uid] = DicomField(element, name, uid, is_filemeta)
+                    self.fields.add(uid, DicomField(element, name, uid, is_filemeta))
             else:
                 bot.warning("Cannot find tag for field %s, skipping." % name)
 
@@ -643,20 +661,35 @@ class DicomParser:
 
         # Code the value with something in the response
         elif action == "JITTER":
-            value = parse_value(
-                item=self.lookup,
-                dicom=self.dicom,
-                value=value,
-                field=field,
-                funcs=self.deid_funcs,
-            )
-            if value is not None:
-                # Jitter the field by the supplied value
-                new_val = jitter_timestamp(field=field, value=value)
-                if new_val not in [None, ""]:
-                    self.replace_field(field, new_val)
+            # Check if the field's actual value is empty before attempting jitter
+            field_value = field.element.value
+            if field_value in [None, ""] or (
+                isinstance(field_value, str) and not field_value.strip()
+            ):
+                bot.debug(
+                    "JITTER %s skipped: field has empty value, deleting field" % field
+                )
+                self.delete_field(field)
             else:
-                bot.warning("JITTER %s unsuccessful" % field)
+                value = parse_value(
+                    item=self.lookup,
+                    dicom=self.dicom,
+                    value=value,
+                    field=field,
+                    funcs=self.deid_funcs,
+                )
+                if value is not None:
+                    # Jitter the field by the supplied value
+                    new_val = jitter_timestamp(field=field, value=value)
+                    if new_val not in [None, ""]:
+                        self.replace_field(field, new_val)
+                    else:
+                        bot.debug(
+                            "JITTER %s resulted in empty value, deleting field" % field
+                        )
+                        self.delete_field(field)
+                else:
+                    bot.warning("JITTER %s unsuccessful" % field)
 
         # elif "KEEP" --> Do nothing. Keep the original
 
@@ -685,7 +718,9 @@ class DicomParser:
                     # but field.uid is in internal format. expand_field_expression normalizes
                     # all field identifier formats for proper comparison.
                     excluded_fields = expand_field_expression(
-                        field=excluded_field, dicom=self.dicom, contenders=self.fields
+                        field=excluded_field,
+                        dicom=self.dicom,
+                        contenders=self.fields,
                     )
                     # Check if the current field's UID matches any of the expanded
                     # excluded fields. This ensures format-agnostic matching regardless
