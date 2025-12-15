@@ -4,6 +4,8 @@ __license__ = "MIT"
 
 import re
 from collections import defaultdict
+from contextlib import contextmanager
+from copy import deepcopy
 from functools import cache
 
 from pydicom import FileDataset
@@ -52,10 +54,8 @@ class DicomField:
 
     def name_contains(self, expression):
         """
-        Determine if a name contains a pattern or expression.
-        Use whole_string to match the entire string exactly (True),
-        or partially (False).
-        Use re to search a field for a regular expression, meaning
+        Determine if a name contains an expression.
+        Use expression to search a field, meaning
         the name, the keyword (nested) or the string tag.
         name.lower: includes nested keywords (e.g., Sequence_Child)
         self.element.name: is the human friendly name "Sequence Child"
@@ -65,7 +65,7 @@ class DicomField:
         - Patient's Name (tag name)
         - patient's name (lowercase tag name)
         - PatientName (tag keyword)
-        - PatientN (tag keyword partial match, with whole_string=False)
+        - PatientN (tag keyword partial match)
         - (0010,0010) (parentheses-enclosed, comma-separated group, element)
         - 00100010 (stripped group, element)
 
@@ -230,7 +230,7 @@ def expand_field_expression(field, dicom, contenders=None):
     allfields: include all fields
     exceptfields: filter to all fields except those listed ( | separated)
 
-    Returns: a list of DicomField objects
+    Returns: a dictionary of DicomField objects
     """
     # Expanders that don't have a : must be checked for
     expanders = ["all"]
@@ -242,7 +242,7 @@ def expand_field_expression(field, dicom, contenders=None):
     # Case 1: field is an expander without an argument (e.g., no :)
     if field.lower() in expanders:
         if field.lower() == "all":
-            fields = contenders.fields
+            fields = deepcopy(contenders.fields)
         return fields
 
     # Case 2: The field is a specific field OR an expander with argument (A:B)
@@ -302,12 +302,8 @@ def field_matches_expander(expander, expression_string, expression_re, field):
     if expander.lower() == "select":
         return field.select_matches(expression_string)
 
-    # Escape the expression string to avoid regex errors from unbalanced parentheses
     if expression_re is None:
-        try:
-            expression_re = re.compile(expression_string, re.IGNORECASE)
-        except re.error:
-            expression_re = re.compile(re.escape(expression_string), re.IGNORECASE)
+        expression_re = re.compile(expression_string, re.IGNORECASE)
 
     if expander.lower() in ["endswith", "startswith", "contains"]:
         return field.name_contains(expression_re)
@@ -316,15 +312,6 @@ def field_matches_expander(expander, expression_string, expression_re, field):
         return not field.name_contains(expression_re)
 
     return False
-
-
-# NOTE: this hashing function is required to enable caching on
-# `get_fields_inner`. While it is not ideal to override the hashing
-# behavior of the PyDicom FileDataset class, it appears to be the
-# only way to enable the use of caching without incurring significant
-# performance overhead. Note that adding a proxy class around this
-# decreases performance substantially (50% slowdown measured).
-FileDataset.__hash__ = lambda self: id(self)
 
 
 class FieldsWithLookups:
@@ -349,10 +336,12 @@ class FieldsWithLookups:
 
     def get_exact_matches(self, field):
         """
-        Get exact matches for a field name or tag.
+        Get exact case-insensitive matches for a field name or tag.
 
         Returns a list of DicomField objects.
         """
+        if isinstance(field, str):
+            field = field.lower()
         exact_match_contenders = (
             self.lookup_tables["name"][field]
             + self.lookup_tables["tag"][field]
@@ -384,25 +373,28 @@ class FieldsWithLookups:
 
     def _get_field_lookup_keys(self, field):
         if not isinstance(field, DicomField):
-            self.lookup_tables["name"][field].append(field)
-            return {"name": [field]}
+            case_insensitive_field = field.lower()
+            self.lookup_tables["name"][case_insensitive_field].append(
+                case_insensitive_field
+            )
+            return {"name": [case_insensitive_field]}
         lookup_keys = {}
         if field.name:
-            lookup_keys["name"] = [field.name]
+            lookup_keys["name"] = [field.name.lower()]
         if field.tag:
-            lookup_keys["tag"] = [field.tag]
+            lookup_keys["tag"] = [field.tag.lower()]
         if field.stripped_tag:
-            lookup_keys["stripped_tag"] = [field.stripped_tag]
+            lookup_keys["stripped_tag"] = [field.stripped_tag.lower()]
         if field.element.name:
-            lookup_keys["element_name"] = [field.element.name]
+            lookup_keys["element_name"] = [field.element.name.lower()]
         if field.element.keyword:
-            lookup_keys["element_keyword"] = [field.element.keyword]
+            lookup_keys["element_keyword"] = [field.element.keyword.lower()]
         if field.uid:
-            lookup_keys["uid"] = [field.uid]
+            lookup_keys["uid"] = [field.uid.lower()]
         if field.element.is_private:
             lookup_keys["name"] = lookup_keys.get("name", []) + [
-                f'({field.element.tag.group:04X},"{field.element.private_creator}",{(field.element.tag.element & 0x00FF):02X})',
-                f'{field.element.tag.group:04X},"{field.element.private_creator}",{(field.element.tag.element & 0x00FF):02X}',
+                f'({field.element.tag.group:04X},"{field.element.private_creator}",{(field.element.tag.element & 0x00FF):02X})'.lower(),
+                f'{field.element.tag.group:04X},"{field.element.private_creator}",{(field.element.tag.element & 0x00FF):02X}'.lower(),
             ]
         return lookup_keys
 
@@ -412,15 +404,34 @@ class FieldsWithLookups:
                 self.lookup_tables[table_name][key].append(field)
 
     def remove(self, uid):
-        if uid in self.fields:
-            field = self.fields[uid]
-            del self.fields[uid]
-            for table_name, lookup_keys in self._get_field_lookup_keys(field).items():
-                for key in lookup_keys:
-                    if field in self.lookup_tables[table_name][key]:
-                        self.lookup_tables[table_name][key].remove(field)
-                        if not self.lookup_tables[table_name][key]:
-                            del self.lookup_tables[table_name][key]
+        if uid not in self.fields:
+            return
+        field = self.fields[uid]
+        for table_name, lookup_keys in self._get_field_lookup_keys(field).items():
+            for key in lookup_keys:
+                if field not in self.lookup_tables[table_name][key]:
+                    continue
+                self.lookup_tables[table_name][key].remove(field)
+                if not self.lookup_tables[table_name][key]:
+                    del self.lookup_tables[table_name][key]
+        del self.fields[uid]
+
+
+@contextmanager
+def override_attr(obj, attr, value):
+    """
+    Temporarily override an attribute of an object.
+    """
+    attribute_undefined = not hasattr(obj, attr)
+    try:
+        original_value = getattr(obj, attr, None)
+        setattr(obj, attr, value)
+        yield
+    finally:
+        if attribute_undefined:
+            delattr(obj, attr)
+        else:
+            setattr(obj, attr, original_value)
 
 
 def get_fields_with_lookup(dicom, skip=None, expand_sequences=True, seen=None):
@@ -430,15 +441,23 @@ def get_fields_with_lookup(dicom, skip=None, expand_sequences=True, seen=None):
     Each entry is a DicomField. If we find a sequence, we unwrap it and
     represent the location with the name (e.g., Sequence__Child)
     """
-    fields, new_seen, new_skip = _get_fields_inner(
-        dicom,
-        skip=tuple(skip) if skip else None,
-        expand_sequences=expand_sequences,
-        seen=tuple(seen) if seen else None,
-    )
-    skip = new_skip
-    seen = new_seen
-    return FieldsWithLookups(fields)
+    # NOTE: this hashing function is required to enable caching on
+    # `get_fields_inner`. While it is not ideal to override the hashing
+    # behavior of the PyDicom FileDataset class, it appears to be the
+    # only way to enable the use of caching without incurring significant
+    # performance overhead. Note that adding a proxy class around this
+    # decreases performance substantially (50% slowdown measured).
+    with override_attr(FileDataset, "__hash__", lambda self: id(self)):
+        fields, new_seen, new_skip = _get_fields_inner(
+            dicom,
+            skip=tuple(skip) if skip else None,
+            expand_sequences=expand_sequences,
+            seen=tuple(seen) if seen else None,
+        )
+        skip = new_skip
+        seen = new_seen
+
+        return FieldsWithLookups(fields)
 
 
 @cache

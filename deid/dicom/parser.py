@@ -178,64 +178,50 @@ class DicomParser:
             return parent, desired
         return desired
 
+    def get_child_fields(self, field):
+        """
+        Return a list of child field UIDs for a given field.
+
+        This method identifies all field UIDs in self.fields that are nested under the provided field,
+        based on the UID prefix convention (parent UID + '__').
+        It is used to find and remove all child fields when blanking or deleting a parent field (e.g., a sequence).
+        """
+        field_uid_prefix = field.uid + "__"
+        return [uid for uid in self.fields if uid.startswith(field_uid_prefix)]
+
     def delete_field(self, field):
         """
         Delete a field from the dicom.
 
         We do this by way of parsing all nested levels of a tag into actual tags,
-        and deleting the child node.
+        and deleting the child node. If the field being deleted has nested children
+        (e.g., a sequence), also remove all child field UIDs from the internal lookup.
         """
         # Returns the parent, and a DataElement (indexes into parent by tag)
         parent, desired = self.get_nested_field(field, return_parent=True)
         if parent and desired in parent:
             del parent[desired]
+            # Remove the field itself from the lookup
             self.fields.remove(field.uid)
-            # Log successful removal with tag name if available
-            tag_name = getattr(field.element, "keyword", "") or getattr(
-                field.element, "name", ""
-            )
-            if tag_name:
-                bot.debug(f"Deid - Removed tag {desired} ({tag_name}).")
-            else:
-                bot.debug(f"Deid - Removed tag {desired}.")
-        elif parent is None and desired in self.dicom:
-            # Handle case where get_nested_field couldn't navigate (e.g., empty sequence)
-            # but the field exists directly in the main dicom dataset
-            del self.dicom[desired]
-            self.fields.remove(field.uid)
-            # Log successful removal with tag name if available
-            tag_name = getattr(field.element, "keyword", "") or getattr(
-                field.element, "name", ""
-            )
-            if tag_name:
-                bot.debug(f"Deid - Removed tag {desired} ({tag_name}).")
-            else:
-                bot.debug(f"Deid - Removed tag {desired}.")
-        else:
-            # Field was not found - this can happen if parent sequence was already removed
-            bot.debug(
-                f"Deid - Could not remove field {field.uid} - field not found (parent may have been removed)"
-            )
+            # Also remove any child fields that were nested under this field
+            for child_uid in self.get_child_fields(field):
+                self.fields.remove(child_uid)
 
     def blank_field(self, field):
         """
-        Blank a field
+        Blank a field.
+
+        If the field being blanked has nested children (e.g., a sequence),
+        also remove all child field UIDs from the internal lookup since they
+        become inaccessible after blanking the parent.
         """
         # Returns the parent, and a DataElement (indexes into parent by tag)
         parent, desired = self.get_nested_field(field, return_parent=True)
         if parent and desired in parent:
             parent[desired].value = None
-        elif parent is None and desired in self.dicom:
-            # Handle case where get_nested_field couldn't navigate (e.g., empty sequence)
-            # but the field exists directly in the main dicom dataset
-            self.dicom[desired].value = None
-        else:
-            # Field was not found - this can happen if parent sequence was already removed
-            bot.warning(
-                f"Deid - Could not blank field {field.uid} - field not found (parent may have been removed)"
-            )
-            # but the field exists directly in the main dicom dataset
-            self.dicom[desired].value = None
+            # Also remove any child fields that were nested under this field
+            for child_uid in self.get_child_fields(field):
+                self.fields.remove(child_uid)
 
     def replace_field(self, field, value):
         """
@@ -378,7 +364,7 @@ class DicomParser:
         a DicomField. If we find a sequence, we unwrap it and
         represent the location with the name (e.g., Sequence__Child)
         """
-        if not self.fields:
+        if not self.fields or not self.fields_by_name:
             self.fields = get_fields_with_lookup(
                 dicom=self.dicom,
                 expand_sequences=expand_sequences,
@@ -661,35 +647,24 @@ class DicomParser:
 
         # Code the value with something in the response
         elif action == "JITTER":
-            # Check if the field's actual value is empty before attempting jitter
-            field_value = field.element.value
-            if field_value in [None, ""] or (
-                isinstance(field_value, str) and not field_value.strip()
-            ):
-                bot.debug(
-                    "JITTER %s skipped: field has empty value, deleting field" % field
-                )
-                self.delete_field(field)
+            # Skip jittering if field value is empty
+            if not field.element.value:
+                return
+
+            value = parse_value(
+                item=self.lookup,
+                dicom=self.dicom,
+                value=value,
+                field=field,
+                funcs=self.deid_funcs,
+            )
+            if value is not None:
+                # Jitter the field by the supplied value
+                new_val = jitter_timestamp(field=field, value=value)
+                if new_val not in [None, ""]:
+                    self.replace_field(field, new_val)
             else:
-                value = parse_value(
-                    item=self.lookup,
-                    dicom=self.dicom,
-                    value=value,
-                    field=field,
-                    funcs=self.deid_funcs,
-                )
-                if value is not None:
-                    # Jitter the field by the supplied value
-                    new_val = jitter_timestamp(field=field, value=value)
-                    if new_val not in [None, ""]:
-                        self.replace_field(field, new_val)
-                    else:
-                        bot.debug(
-                            "JITTER %s resulted in empty value, deleting field" % field
-                        )
-                        self.delete_field(field)
-                else:
-                    bot.warning("JITTER %s unsuccessful" % field)
+                bot.warning("JITTER %s unsuccessful" % field)
 
         # elif "KEEP" --> Do nothing. Keep the original
 

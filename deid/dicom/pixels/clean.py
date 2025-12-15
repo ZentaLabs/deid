@@ -233,22 +233,51 @@ class DicomCleaner:
         else:
             bot.warning("use detect() --> clean() before saving is possible.")
 
-    def save_dicom(self, output_folder=None, image_type="cleaned"):
+    def save_dicom(
+        self,
+        output_folder=None,
+        image_type="cleaned",
+        preserve_compression=False,
+        compression=None,
+    ):
         """
         Save a cleaned dicom to disk.
 
         We expose an option to save an original (change image_type to "original"
         to be consistent, although this is not incredibly useful given it would
         duplicate the original data.
+
+        Additional options:
+        - `preserve_compression`: if the original dicom was compressed, attempt
+           to use the same compression when saving back out to disk.
+        - `compression`: if provided, attempt to use this compression when
+           saving back out to disk.
         """
         # Having clean also means has dicom image
         if hasattr(self, image_type):
             dicom_name = self._get_clean_name(output_folder)
             dicom = utils.dcmread(self.dicom_file, force=True)
-            # If going from compressed, change TransferSyntax
-            if dicom.file_meta.TransferSyntaxUID.is_compressed is True:
+            original_transfer_syntax = dicom.file_meta.TransferSyntaxUID
+            if original_transfer_syntax.is_compressed:
                 dicom.decompress()
             dicom.PixelData = self.cleaned.tobytes()
+            if original_transfer_syntax.is_compressed and preserve_compression:
+                try:
+                    dicom.compress(original_transfer_syntax)
+                except NotImplementedError:
+                    bot.warning(
+                        "Could not recompress dicom with %s, saving uncompressed."
+                        % original_transfer_syntax
+                    )
+            elif compression is not None:
+                try:
+                    dicom.compress(compression)
+                except NotImplementedError:
+                    bot.warning(
+                        "Could not recompress dicom with %s, saving uncompressed."
+                        % compression
+                    )
+
             dicom.save_as(dicom_name)
             return dicom_name
         else:

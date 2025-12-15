@@ -14,6 +14,12 @@ and **Merged pull requests**. Critical items to know are:
 Referenced versions in headers are tagged on Github, in parentheses are for pypi.
 
 ## [vxx](https://github.com/pydicom/deid/tree/master) (master)
+- Add multi-value timestamp support and improve jitter function [#296](https://github.com/pydicom/deid/pull/296) (0.4.11)
+- Optimize KEEP action performance by caching field contenders & fix SyntaxWarning for invalid escape sequences [#293](https://github.com/pydicom/deid/pull/295) (0.4.10)
+- Fix field removal and blanking to clean up child UID references [#293](https://github.com/pydicom/deid/pull/293) (0.4.9)
+- Fix UID lookup for nested sequence fields in DICOM datasets [#292](https://github.com/pydicom/deid/pull/292) (0.4.8)
+- Allow saving with a compressed transfer syntax [#290](https://github.com/pydicom/deid/pull/290) (0.4.7)
+- Improve performance of header deid with caching and lookup tables [#289](https://github.com/pydicom/deid/pull/289)
 - Fix REMOVE action to respect REPLACE or JITTER priority [#283](https://github.com/pydicom/deid/pull/283) (0.4.6)
 - Add enhanced private tag syntax support [#282](https://github.com/pydicom/deid/pull/282) (0.4.5)
 - Fix tag specification for KEEP action [#281](https://github.com/pydicom/deid/pull/281) (0.4.4)

@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from copy import deepcopy
 
+from pydicom.uid import RLELossless
+
 from deid.config import DeidRecipe
 from deid.data import get_dataset
 from deid.dicom import utils
@@ -228,6 +230,29 @@ class TestClean(unittest.TestCase):
 
         compare = inputpixels[0:2000, 0:2000] == outputpixels[0:2000, 0:2000]
         self.assertTrue(compare.all())
+
+    def test_pixel_cleaner_save_compressed(self):
+        """Test the pixel cleaner to ensure that saving as compressed works as expected."""
+        from deid.dicom import DicomCleaner
+
+        dicom_file = get_file(self.dataset)
+        deid = os.path.join(self.deidpath, "remove_coordinates.dicom")
+
+        client = DicomCleaner(output_folder=self.tmpdir, deid=deid)
+        out = client.detect(dicom_file)
+        self.assertTrue(out["flagged"])
+
+        client.clean()
+        # Explicitly save as a RLELossless compressed transfer syntax
+        uncompressed = client.save_dicom()
+        uncompressed_file = utils.dcmread(uncompressed)
+        # Explicitly save as a RLELossless compressed transfer syntax
+        compressed = client.save_dicom(compression=RLELossless)
+        compressed_file = utils.dcmread(compressed)
+
+        # Assert the transfer syntax has changed
+        self.assertEqual(compressed_file.file_meta.TransferSyntaxUID, RLELossless)
+        self.assertNotEqual(uncompressed_file.file_meta.TransferSyntaxUID, RLELossless)
 
 
 if __name__ == "__main__":
