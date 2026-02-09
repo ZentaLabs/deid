@@ -98,6 +98,8 @@ def replace_identifiers(
     strip_sequences=False,
     remove_private=False,
     disable_skip=False,
+    progress_callback_init=None,
+    progress_callback_update=None,
 ):
     """
     Replace identifiers.
@@ -118,7 +120,16 @@ def replace_identifiers(
 
     # Parse through dicom files, update headers, and save
     updated_files = []
+    # If a progress callback initializer is provided, call it with the total number of files.
+    # This can be used to set up a progress bar, e.g., tqdm(total=len(dicom_files)).
+    if progress_callback_init is not None:
+        progress_callback_init(len(dicom_files))
+
+    # Iterate through each DICOM file, calling the update callback if provided.
+    # The update callback can be used to update progress, such as incrementing a progress bar.
     for dicom_file in dicom_files:
+        if progress_callback_update is not None:
+            progress_callback_update(dicom_file)
         parser = DicomParser(
             dicom_file,
             force=force,
