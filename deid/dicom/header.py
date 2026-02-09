@@ -144,5 +144,6 @@ def replace_identifiers(
             updated_files.append(ds)
         else:
             updated_files.append(parser.dicom)
+        bot.info("Anonymized file %s" % parser.dicom_file)
 
     return updated_files
